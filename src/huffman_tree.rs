@@ -1,12 +1,19 @@
 pub struct HuffmanTree {
     nodes: Vec<Node>,
+
+    table_type: u8, // 0 for luminance, 1 for chrominance
+    table_number: u8,
 }
 
 type NodeIndex = usize;
 
 impl HuffmanTree {
-    pub fn new() -> Self {
-        Self { nodes: Vec::new() }
+    pub fn new(table_type: u8, table_number: u8) -> Self {
+        Self {
+            nodes: Vec::new(),
+            table_type,
+            table_number,
+        }
     }
 
     pub fn build(&mut self, lengths: &Vec<u8>, vals: &Vec<u8>) {
@@ -84,7 +91,6 @@ impl HuffmanTree {
         if right_sibling == node {
             match self.right_node_level(parent) {
                 Some(parent_right_sibling) => {
-                    println!("{} {}", node, parent_right_sibling);
                     Some(self.nodes[parent_right_sibling].left_child.unwrap())
                 }
                 None => None,
