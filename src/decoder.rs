@@ -1,5 +1,5 @@
 use crate::codes_markers::{JFIF_BYTE_FF, JFIF_EOI};
-use crate::huffman_tree::HuffmanTree;
+use crate::huffman_tree::{HuffmanResult, HuffmanTree};
 use crate::mcu::MCU;
 use std::collections::HashMap;
 use std::fs;
@@ -25,6 +25,10 @@ fn next_byte<T: Iterator<Item = u8>>(it: &mut T) -> u8 {
     it.next().expect("[E] - image ended unexpectedly").clone()
 }
 
+fn next_bit<T: Iterator<Item = bool>>(it: &mut T) -> bool {
+    it.next().expect("[E] - image ended unexpectedly").clone()
+}
+
 fn next_n_bytes<T: Iterator<Item = u8>>(it: &mut T, length: usize) -> Vec<u8> {
     (0..length).into_iter().map(|_| next_byte(it)).collect()
 }
@@ -36,6 +40,30 @@ fn all_bytes<T: Iterator<Item = u8>>(it: &mut T) -> Vec<u8> {
     }
 
     res
+}
+
+fn bitstring_to_value(mut val: u16, cat: u8) -> i32 {
+    let mask: u16 = 1 << (cat - 1);
+    let neg = val & mask == 0;
+
+    let mut res = val as i32;
+    if neg {
+        val = !val;
+        val = val << (16 - cat) >> (16 - cat);
+        res = -(val as i32);
+    }
+
+    res
+}
+
+fn u8_to_bool(val: u8) -> Vec<bool> {
+    (0..8)
+        .map(|i| {
+            let mask = 1 << i;
+            val & mask != 0
+        })
+        .rev()
+        .collect::<Vec<_>>()
 }
 
 impl Decoder {
@@ -116,7 +144,7 @@ impl Decoder {
                             println!("\tsegment length: {}", segment_length);
                             self.parse_SOS(seg);
 
-                            let rest_of_file = all_bytes(&mut img_iter);
+                            let mut rest_of_file = all_bytes(&mut img_iter);
                             let mut end_of_img = rest_of_file.len() - 2;
 
                             for p in (1..rest_of_file.len()).rev() {
@@ -129,6 +157,7 @@ impl Decoder {
                             }
 
                             rest_of_file.truncate(end_of_img);
+                            todo!("some ff's have 00 after them. must get rid of the 00");
 
                             self.parse_image_data(rest_of_file);
                         }
@@ -140,6 +169,26 @@ impl Decoder {
                 _ => (),
             }
         }
+    }
+
+    fn get_huffman_table_dc(&self, component_id: usize) -> &HuffmanTree {
+        let (huffman_dc, huffman_ac) = self.component_id_to_huffman_table[&component_id];
+
+        self.huffman_tables
+            .iter()
+            .filter(|table| table.table_type == 0 && table.table_number == huffman_dc)
+            .next()
+            .unwrap()
+    }
+
+    fn get_huffman_table_ac(&self, component_id: usize) -> &HuffmanTree {
+        let (huffman_dc, huffman_ac) = self.component_id_to_huffman_table[&component_id];
+
+        self.huffman_tables
+            .iter()
+            .filter(|table| table.table_type == 1 && table.table_number == huffman_ac)
+            .next()
+            .unwrap()
     }
 
     fn parse_APP0(&mut self, bytes: Vec<u8>) {
@@ -265,6 +314,7 @@ impl Decoder {
         for i in characters.iter() {
             print!("{:02X} ", i);
         }
+        self.huffman_tables.last().unwrap().print();
         println!();
     }
 
@@ -306,5 +356,46 @@ impl Decoder {
 
     fn parse_image_data(&mut self, img_data: Vec<u8>) {
         let mcu_num = self.img_width * self.img_height / 64 as usize;
+
+        let mut img_bits = Vec::new();
+        for byte in img_data.iter() {
+            let bits = u8_to_bool(*byte);
+            bits.into_iter().for_each(|b| img_bits.push(b));
+        }
+
+        let mut img_bits_iter = img_bits.into_iter();
+
+        for _ in 0..mcu_num {
+            let mut run_length_encoding: [Vec<u8>; 3];
+
+            for comp_id in 0..3 {
+                let huffman_table = self.get_huffman_table_dc(comp_id);
+
+                let mut scanned_bits = Vec::new();
+
+                // decode DC
+                loop {
+                    scanned_bits.push(next_bit(&mut img_bits_iter));
+
+                    match huffman_table.try_decode(&scanned_bits) {
+                        HuffmanResult::Some(val) => {
+                            let zero_count = val >> 4;
+                            let category = val << 4 >> 4;
+                            let mut dc_coeff: u16 = 0;
+
+                            for _ in 0..category {
+                                dc_coeff = dc_coeff << 1;
+                                dc_coeff += next_bit(&mut img_bits_iter) as u16;
+                            }
+
+                            let dc_coeff = bitstring_to_value(dc_coeff, category);
+                            println!("WOWOWOW DC COEFF - {}", dc_coeff);
+                        }
+                        HuffmanResult::EOB => (),
+                        HuffmanResult::None => (),
+                    }
+                }
+            }
+        }
     }
 }

@@ -1,8 +1,10 @@
 pub struct HuffmanTree {
     nodes: Vec<Node>,
 
-    table_type: u8, // 0 for luminance, 1 for chrominance
-    table_number: u8,
+    pub table_type: u8, // 0 for luminance, 1 for chrominance
+    pub table_number: u8,
+
+    depth: usize,
 }
 
 type NodeIndex = usize;
@@ -13,11 +15,14 @@ impl HuffmanTree {
             nodes: Vec::new(),
             table_type,
             table_number,
+            depth: 0,
         }
     }
 
     pub fn build(&mut self, lengths: &Vec<u8>, vals: &Vec<u8>) {
         self.nodes = Vec::new();
+
+        self.depth = lengths.len();
 
         let root = Node::new(None, None, None, 0);
         self.nodes.push(root);
@@ -47,24 +52,6 @@ impl HuffmanTree {
             self.insert_children(current_node_index);
 
             leftmost_node_index = self.nodes[leftmost_parent_index].left_child.unwrap();
-        }
-    }
-
-    pub fn print(&self) {
-        let mut stack = Vec::new();
-
-        stack.push((0, String::from("")));
-
-        while let Some((node, node_code)) = stack.pop() {
-            if self.nodes[node].is_leaf() {
-                println!("{} = {}", self.nodes[node].code, node_code);
-            }
-            if let Some(left_node) = self.nodes[node].left_child {
-                stack.push((left_node, format!("{}0", node_code)));
-            }
-            if let Some(right_node) = self.nodes[node].right_child {
-                stack.push((right_node, format!("{}1", node_code)));
-            }
         }
     }
 
@@ -99,10 +86,56 @@ impl HuffmanTree {
             Some(right_sibling)
         }
     }
+
+    pub fn try_decode(&self, bits: &[bool]) -> HuffmanResult {
+        let mut node_index = 0;
+
+        for bit in bits.iter() {
+            node_index = if *bit {
+                self.nodes[node_index].right_child.unwrap()
+            } else {
+                self.nodes[node_index].left_child.unwrap()
+            };
+        }
+
+        if self.nodes[node_index].is_leaf() {
+            if bits.len() > self.depth {
+                return HuffmanResult::EOB;
+            }
+            return HuffmanResult::Some(self.nodes[node_index].code);
+        } else {
+            return HuffmanResult::None;
+        }
+    }
+
+    pub fn print(&self) {
+        let mut stack = Vec::new();
+
+        stack.push((0, String::from("")));
+        println!("depth: {}", self.depth);
+
+        while let Some((node, node_code)) = stack.pop() {
+            if self.nodes[node].is_leaf() {
+                println!("{} = {}", self.nodes[node].code, node_code);
+            }
+            if let Some(left_node) = self.nodes[node].left_child {
+                stack.push((left_node, format!("{}0", node_code)));
+            }
+            if let Some(right_node) = self.nodes[node].right_child {
+                stack.push((right_node, format!("{}1", node_code)));
+            }
+        }
+    }
+}
+
+pub enum HuffmanResult {
+    Some(u8),
+    None,
+    EOB,
 }
 
 #[derive(PartialEq, Eq)]
-pub struct Node {
+struct Node {
     parent_index: Option<NodeIndex>,
 
     left_child: Option<NodeIndex>,
