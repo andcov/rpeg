@@ -99,7 +99,7 @@ impl HuffmanTree {
         }
 
         if self.nodes[node_index].is_leaf() {
-            if bits.len() > self.depth {
+            if bits.len() > self.depth || self.nodes[node_index].code == 0 {
                 return HuffmanResult::EOB;
             }
             return HuffmanResult::Some(self.nodes[node_index].code);
@@ -116,7 +116,7 @@ impl HuffmanTree {
 
         while let Some((node, node_code)) = stack.pop() {
             if self.nodes[node].is_leaf() {
-                println!("{} = {}", self.nodes[node].code, node_code);
+                println!("{:02X} = {}", self.nodes[node].code, node_code);
             }
             if let Some(left_node) = self.nodes[node].left_child {
                 stack.push((left_node, format!("{}0", node_code)));

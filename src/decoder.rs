@@ -12,8 +12,8 @@ pub struct Decoder {
     huffman_tables: Vec<HuffmanTree>,
     component_id_to_huffman_table: HashMap<usize, (u8, u8)>,
 
-    quantization_table_luma: [u8; 64],
-    quantization_table_chroma: [u8; 64],
+    quantization_table_luma: [[u8; 64]; 64],
+    quantization_table_chroma: [[u8; 64]; 64],
 
     img_height: usize,
     img_width: usize,
@@ -43,6 +43,9 @@ fn all_bytes<T: Iterator<Item = u8>>(it: &mut T) -> Vec<u8> {
 }
 
 fn bitstring_to_value(mut val: u16, cat: u8) -> i32 {
+    if cat == 0 {
+        return 0;
+    }
     let mask: u16 = 1 << (cat - 1);
     let neg = val & mask == 0;
 
@@ -77,8 +80,8 @@ impl Decoder {
             huffman_tables: Vec::new(),
             component_id_to_huffman_table: HashMap::new(),
 
-            quantization_table_luma: [0; 64],
-            quantization_table_chroma: [0; 64],
+            quantization_table_luma: [[0; 64]; 64],
+            quantization_table_chroma: [[0; 64]; 64],
 
             img_height: 0,
             img_width: 0,
@@ -157,7 +160,15 @@ impl Decoder {
                             }
 
                             rest_of_file.truncate(end_of_img);
-                            todo!("some ff's have 00 after them. must get rid of the 00");
+                            let mut to_eliminate = Vec::new();
+                            for i in 0..rest_of_file.len() - 1 {
+                                if rest_of_file[i] == JFIF_BYTE_FF && rest_of_file[i + 1] == 0x00 {
+                                    to_eliminate.push(i + 1);
+                                }
+                            }
+                            to_eliminate.into_iter().for_each(|id| {
+                                rest_of_file.remove(id);
+                            });
 
                             self.parse_image_data(rest_of_file);
                         }
@@ -246,9 +257,11 @@ impl Decoder {
         let precision = prec_dest_byte >> 4;
         let table_type = prec_dest_byte << 4 >> 4;
 
-        let mut quantization_table = [0u8; 64];
-        for i in 0..64 {
-            quantization_table[i] = next_byte(&mut img_iter);
+        let mut quantization_table = [[0u8; 64]; 64];
+        for i in 0..8 {
+            for j in 0..8 {
+                quantization_table[i][j] = next_byte(&mut img_iter);
+            }
         }
 
         if table_type == 0 {
@@ -263,7 +276,7 @@ impl Decoder {
         for i in 0..8 {
             print!("\t\t");
             for j in 0..8 {
-                print!("{} ", quantization_table[8 * i + j]);
+                print!("{} ", quantization_table[i][j]);
             }
             println!();
         }
@@ -343,11 +356,18 @@ impl Decoder {
             );
         }
 
+        println!("\thuffman tables for components:");
         for i in 0..component_count {
-            let component_id = next_byte(&mut img_iter);
+            let mut component_id = next_byte(&mut img_iter);
+            component_id -= 1;
             let huffman_table = next_byte(&mut img_iter);
             let huffman_table_dc = huffman_table >> 4;
             let huffman_table_ac = huffman_table << 4 >> 4;
+
+            println!(
+                "\t\t{} -> {} (dc), {} (ac)",
+                component_id, huffman_table_dc, huffman_table_ac
+            );
 
             self.component_id_to_huffman_table
                 .insert(component_id as usize, (huffman_table_dc, huffman_table_ac));
@@ -355,7 +375,7 @@ impl Decoder {
     }
 
     fn parse_image_data(&mut self, img_data: Vec<u8>) {
-        let mcu_num = self.img_width * self.img_height / 64 as usize;
+        let mcu_count = self.img_width * self.img_height / 64 as usize;
 
         let mut img_bits = Vec::new();
         for byte in img_data.iter() {
@@ -363,19 +383,26 @@ impl Decoder {
             bits.into_iter().for_each(|b| img_bits.push(b));
         }
 
-        let mut img_bits_iter = img_bits.into_iter();
+        println!("{}", img_bits.len());
+        for i in img_bits.iter() {
+            print!("{}", if *i { "1" } else { "0" });
+        }
+        println!();
 
-        for _ in 0..mcu_num {
-            let mut run_length_encoding: [Vec<u8>; 3];
+        let mut img_bits_iter = img_bits.into_iter();
+        let mut cnt = 0;
+        let mut dc_sums = [0; 3];
+
+        for mcu_id in 0..mcu_count {
+            let mut run_length_encoding: Vec<Vec<i32>> = vec![Vec::new(), Vec::new(), Vec::new()];
 
             for comp_id in 0..3 {
-                let huffman_table = self.get_huffman_table_dc(comp_id);
-
-                let mut scanned_bits = Vec::new();
-
                 // decode DC
+                let huffman_table = self.get_huffman_table_dc(comp_id);
+                let mut scanned_bits = Vec::new();
                 loop {
                     scanned_bits.push(next_bit(&mut img_bits_iter));
+                    cnt += 1;
 
                     match huffman_table.try_decode(&scanned_bits) {
                         HuffmanResult::Some(val) => {
@@ -386,16 +413,77 @@ impl Decoder {
                             for _ in 0..category {
                                 dc_coeff = dc_coeff << 1;
                                 dc_coeff += next_bit(&mut img_bits_iter) as u16;
+                                cnt += 1;
                             }
 
                             let dc_coeff = bitstring_to_value(dc_coeff, category);
-                            println!("WOWOWOW DC COEFF - {}", dc_coeff);
+
+                            dc_sums[comp_id] += dc_coeff;
+
+                            run_length_encoding[comp_id].push(zero_count as i32);
+                            run_length_encoding[comp_id].push(dc_coeff);
+                            break;
                         }
-                        HuffmanResult::EOB => (),
+                        HuffmanResult::EOB => {
+                            run_length_encoding[comp_id].push(0);
+                            run_length_encoding[comp_id].push(0);
+                            break;
+                        }
+                        HuffmanResult::None => (),
+                    }
+                }
+
+                //println!("cnt {}", cnt);
+
+                // decode AC
+                let huffman_table = self.get_huffman_table_ac(comp_id);
+                let mut scanned_bits = Vec::new();
+                let mut ac_count = 0;
+                loop {
+                    if ac_count == 63 {
+                        //println!("wowowowow 63");
+                        break;
+                    }
+                    scanned_bits.push(next_bit(&mut img_bits_iter));
+                    cnt += 1;
+
+                    match huffman_table.try_decode(&scanned_bits) {
+                        HuffmanResult::Some(val) => {
+                            let zero_count = val >> 4;
+                            let category = val << 4 >> 4;
+                            let mut ac_coeff: u16 = 0;
+
+                            for _ in 0..category {
+                                ac_coeff = ac_coeff << 1;
+                                ac_coeff += next_bit(&mut img_bits_iter) as u16;
+                                cnt += 1;
+                            }
+
+                            let ac_coeff = bitstring_to_value(ac_coeff, category);
+
+                            run_length_encoding[comp_id].push(zero_count as i32);
+                            run_length_encoding[comp_id].push(ac_coeff);
+
+                            scanned_bits = Vec::new();
+                            ac_count += zero_count + 1;
+                        }
+                        HuffmanResult::EOB => {
+                            run_length_encoding[comp_id].push(0);
+                            run_length_encoding[comp_id].push(0);
+                            break;
+                        }
                         HuffmanResult::None => (),
                     }
                 }
             }
+            //println!("{} ({}/{})", cnt, mcu_id, mcu_count);
+            //println!("{:?}", run_length_encoding);
+            let mut mcu = MCU::new(mcu_id, run_length_encoding, dc_sums);
+            mcu.build_idct();
+            self.mcus.push(mcu);
+        }
+        for m in self.mcus.iter() {
+            m.print();
         }
     }
 }
