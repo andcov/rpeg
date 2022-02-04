@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 
-pub struct Decoder {
-    img_path: String,
+pub struct Decoder<'a> {
+    img_path: &'a str,
 
     img_bytes: Vec<u8>,
 
@@ -71,8 +71,8 @@ fn u8_to_bool(val: u8) -> Vec<bool> {
         .collect::<Vec<_>>()
 }
 
-impl Decoder {
-    pub fn new(img_path: String) -> Self {
+impl<'a> Decoder<'a> {
+    pub fn new(img_path: &'a str) -> Self {
         let img_bytes = fs::read(&img_path).expect("[E] - no such file exists");
 
         Self {
@@ -381,11 +381,6 @@ impl Decoder {
     }
 
     fn parse_image_data(&mut self, img_data: Vec<u8>) {
-        let file_idct = File::create("rust_idct.log").unwrap();
-        let mut buffer_idct = BufWriter::new(file_idct);
-        let file_dct = File::create("rust_dct.log").unwrap();
-        let mut buffer_dct = BufWriter::new(file_dct);
-
         let mcu_count = self.img_width * self.img_height / 64 as usize;
 
         let mut img_bits = Vec::new();
@@ -474,22 +469,18 @@ impl Decoder {
                     }
                 }
             }
-            let mut mcu = MCU::new(mcu_id, run_length_encoding, dc_sums, &mut buffer_dct);
+            let mut mcu = MCU::new(mcu_id, run_length_encoding, dc_sums);
             mcu.build_rgb_block(
                 &self.quantization_table_luma,
                 &self.quantization_table_chroma,
-                &mut buffer_idct,
             );
             self.mcus.push(mcu);
 
             dc_sums = next_dc_sums;
         }
 
-        buffer_idct.flush().unwrap();
-        buffer_dct.flush().unwrap();
-
         let mut img = Image::new(self.img_width, self.img_height);
         img.build_from_mcus(&self.mcus);
-        img.dump_to_ppm("test.ppm").unwrap();
+        img.dump_to_ppm(&format!("{}.ppm", self.img_path)).unwrap();
     }
 }

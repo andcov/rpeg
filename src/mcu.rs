@@ -1,12 +1,8 @@
 use std::f64::consts::PI;
 use std::f64::consts::SQRT_2;
-use std::fs::File;
-use std::io::BufWriter;
-use std::io::Write;
 
 pub struct MCU {
     order: usize,
-    dc_sums: [i32; 3],
     pub zz_dct_coeff: [[i32; 64]; 3],
     pub idct_coeff: [[[f64; 8]; 8]; 3],
     pub rgb: [[[u8; 8]; 8]; 3],
@@ -23,17 +19,6 @@ const TABLE: [[usize; 8]; 8] = [
     [35, 36, 48, 49, 57, 58, 62, 63],
 ];
 
-fn two_coord_to_lin_coord(x: usize, y: usize) -> usize {
-    if x > 7 {
-        panic!("[E] - index out of bounds ({} is not in [0, 7])", x);
-    }
-    if y > 7 {
-        panic!("[E] - index out of bounds ({} is not in [0, 7])", y);
-    }
-
-    TABLE[y][x]
-}
-
 fn lin_coord_to_two_coord(i: usize) -> (usize, usize) {
     if i > 63 {
         panic!("[E] - index out of bounds ({} is not in [0, 63])", i);
@@ -49,12 +34,7 @@ fn lin_coord_to_two_coord(i: usize) -> (usize, usize) {
 }
 
 impl MCU {
-    pub fn new(
-        mcu_order: usize,
-        run_length_encoding: Vec<Vec<i32>>,
-        dc_sums: [i32; 3],
-        buff: &mut BufWriter<File>,
-    ) -> Self {
+    pub fn new(mcu_order: usize, run_length_encoding: Vec<Vec<i32>>, dc_sums: [i32; 3]) -> Self {
         if run_length_encoding.len() != 3 {
             panic!(
                 "[E] - you need 3 components to build an MCU ({} != 3)",
@@ -63,8 +43,6 @@ impl MCU {
         }
 
         let mut zz_dct_coeff = [[0; 64]; 3];
-
-        writeln!(buff, "{}", mcu_order + 1).unwrap();
 
         for (comp_id, comp) in run_length_encoding.iter().enumerate() {
             let mut index = 0;
@@ -86,17 +64,10 @@ impl MCU {
                 index += 1;
             }
             zz_dct_coeff[comp_id][0] += dc_sums[comp_id];
-
-            write!(buff, "{} ", comp_id).unwrap();
-            for i in 0..64 {
-                write!(buff, "{} ", zz_dct_coeff[comp_id][i]).unwrap();
-            }
-            writeln!(buff).unwrap();
         }
 
         Self {
             order: mcu_order,
-            dc_sums,
             zz_dct_coeff,
             idct_coeff: [[[0.0; 8]; 8]; 3],
             rgb: [[[0; 8]; 8]; 3],
@@ -107,9 +78,8 @@ impl MCU {
         &mut self,
         quantization_luma: &[[u8; 8]; 8],
         quantization_chroma: &[[u8; 8]; 8],
-        b: &mut BufWriter<File>,
     ) {
-        self.compute_idct(quantization_luma, quantization_chroma, b);
+        self.compute_idct(quantization_luma, quantization_chroma);
         self.level_shift();
         self.convert_ycbcr_to_rgb();
     }
@@ -118,7 +88,6 @@ impl MCU {
         &mut self,
         quantization_luma: &[[u8; 8]; 8],
         quantization_chroma: &[[u8; 8]; 8],
-        b: &mut BufWriter<File>,
     ) {
         let mut temp = [[[0; 8]; 8]; 3];
         for comp_id in 0..3 {
@@ -133,29 +102,6 @@ impl MCU {
                 }
             }
         }
-        //        for comp_id in 0..3 {
-        //            for y in 0..8 {
-        //                for x in 0..8 {
-        //                    temp[comp_id][y][x] = self.zz_dct_coeff[comp_id][two_coord_to_lin_coord(x, y)];
-        //                    if comp_id == 0 {
-        //                        temp[comp_id][y][x] *= quantization_luma[x][y] as i32;
-        //                    } else {
-        //                        temp[comp_id][y][x] *= quantization_chroma[x][y] as i32;
-        //                    }
-        //                }
-        //            }
-        //        }
-
-        //        for comp_id in 0..3 {
-        //            writeln!(b, "{}", comp_id).unwrap();
-        //            for x in 0..8 {
-        //                for y in 0..8 {
-        //                    write!(b, "{} ", temp[comp_id][x][y]).unwrap();
-        //                }
-        //                writeln!(b).unwrap();
-        //            }
-        //            writeln!(b).unwrap();
-        //        }
 
         for comp_id in 0..3 {
             for y in 0..8 {
@@ -175,16 +121,6 @@ impl MCU {
                     self.idct_coeff[comp_id][x][y] = sum / 4.0;
                 }
             }
-        }
-        for comp_id in 0..3 {
-            writeln!(b, "{}", comp_id).unwrap();
-            for x in 0..8 {
-                for y in 0..8 {
-                    write!(b, "{} ", self.idct_coeff[comp_id][x][y] as i32).unwrap();
-                }
-                writeln!(b).unwrap();
-            }
-            writeln!(b).unwrap();
         }
     }
 
