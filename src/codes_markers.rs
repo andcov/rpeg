@@ -20,8 +20,8 @@ pub const JFIF_DQT: u8 = 0xDB; // Define Quantization Table
 pub const JFIF_APP0: u8 = 0xE0; // Application Segment 0, JPEG-JFIF Image
 pub const JFIF_COM: u8 = 0xFE; // Comment
 
-pub const Huffman_DC: u8 = 0; // DC value for DHT
-pub const Huffman_AC: u8 = 1; // AC value for DHT
+pub const HUFFMAN_DC: u8 = 0; // DC value for DHT
+pub const HUFFMAN_AC: u8 = 1; // AC value for DHT
 
-pub const Channel_Luma: u8 = 0; // Code for luminance channel
-pub const Channel_Chroma: u8 = 1; // Code for chrominance channel
+pub const CHANNEL_LUMA: u8 = 0; // Code for luminance channel
+pub const CHANNEL_CHROMA: u8 = 1; // Code for chrominance channel

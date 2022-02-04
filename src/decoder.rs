@@ -1,8 +1,10 @@
-use crate::codes_markers::{JFIF_BYTE_FF, JFIF_EOI};
+use crate::codes_markers::*;
 use crate::huffman_tree::{HuffmanResult, HuffmanTree};
+use crate::image::Image;
 use crate::mcu::MCU;
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufWriter, Write};
 
 pub struct Decoder {
     img_path: String,
@@ -12,8 +14,8 @@ pub struct Decoder {
     huffman_tables: Vec<HuffmanTree>,
     component_id_to_huffman_table: HashMap<usize, (u8, u8)>,
 
-    quantization_table_luma: [[u8; 64]; 64],
-    quantization_table_chroma: [[u8; 64]; 64],
+    quantization_table_luma: [[u8; 8]; 8],
+    quantization_table_chroma: [[u8; 8]; 8],
 
     img_height: usize,
     img_width: usize,
@@ -80,8 +82,8 @@ impl Decoder {
             huffman_tables: Vec::new(),
             component_id_to_huffman_table: HashMap::new(),
 
-            quantization_table_luma: [[0; 64]; 64],
-            quantization_table_chroma: [[0; 64]; 64],
+            quantization_table_luma: [[0; 8]; 8],
+            quantization_table_chroma: [[0; 8]; 8],
 
             img_height: 0,
             img_width: 0,
@@ -102,50 +104,50 @@ impl Decoder {
                 0xff => {
                     let byte_marker = next_byte(&mut img_iter);
                     match byte_marker {
-                        0xe0 => {
-                            let segment_length =
-                                next_byte(&mut img_iter) + next_byte(&mut img_iter);
+                        JFIF_APP0 => {
+                            let segment_length = 0x10 * 0x10 * next_byte(&mut img_iter) as u16
+                                + next_byte(&mut img_iter) as u16;
                             let seg = next_n_bytes(&mut img_iter, segment_length as usize - 2);
 
                             println!("Parsing APP-O segment:");
                             println!("\tsegment length: {}", segment_length);
-                            self.parse_APP0(seg);
+                            self.parse_app0(seg);
                         }
-                        0xdb => {
-                            let segment_length =
-                                next_byte(&mut img_iter) + next_byte(&mut img_iter);
+                        JFIF_DQT => {
+                            let segment_length = 0x10 * 0x10 * next_byte(&mut img_iter) as u16
+                                + next_byte(&mut img_iter) as u16;
                             let seg = next_n_bytes(&mut img_iter, segment_length as usize - 2);
 
                             println!("Parsing DQT segment:");
                             println!("\tsegment length: {}", segment_length);
-                            self.parse_DQT(seg);
+                            self.parse_dqt(seg);
                         }
-                        0xc4 => {
-                            let segment_length =
-                                next_byte(&mut img_iter) + next_byte(&mut img_iter);
+                        JFIF_DHT => {
+                            let segment_length = 0x10 * 0x10 * next_byte(&mut img_iter) as u16
+                                + next_byte(&mut img_iter) as u16;
                             let seg = next_n_bytes(&mut img_iter, segment_length as usize - 2);
 
                             println!("Parsing DHT segment:");
                             println!("\tsegment length: {}", segment_length);
-                            self.parse_DHT(seg);
+                            self.parse_dht(seg);
                         }
-                        0xc0 => {
-                            let segment_length =
-                                next_byte(&mut img_iter) + next_byte(&mut img_iter);
+                        JFIF_SOF0 => {
+                            let segment_length = 0x10 * 0x10 * next_byte(&mut img_iter) as u16
+                                + next_byte(&mut img_iter) as u16;
                             let seg = next_n_bytes(&mut img_iter, segment_length as usize - 2);
 
-                            println!("Parsing SOF segment:");
+                            println!("Parsing SOF0 segment:");
                             println!("\tsegment length: {}", segment_length);
-                            self.parse_SOF(seg);
+                            self.parse_sof(seg);
                         }
-                        0xda => {
-                            let segment_length =
-                                next_byte(&mut img_iter) + next_byte(&mut img_iter);
+                        JFIF_SOS => {
+                            let segment_length = 0x10 * 0x10 * next_byte(&mut img_iter) as u16
+                                + next_byte(&mut img_iter) as u16;
                             let seg = next_n_bytes(&mut img_iter, segment_length as usize - 2);
 
                             println!("Parsing SOS segment:");
                             println!("\tsegment length: {}", segment_length);
-                            self.parse_SOS(seg);
+                            self.parse_sos0(seg);
 
                             let mut rest_of_file = all_bytes(&mut img_iter);
                             let mut end_of_img = rest_of_file.len() - 2;
@@ -160,20 +162,20 @@ impl Decoder {
                             }
 
                             rest_of_file.truncate(end_of_img);
-                            let mut to_eliminate = Vec::new();
-                            for i in 0..rest_of_file.len() - 1 {
-                                if rest_of_file[i] == JFIF_BYTE_FF && rest_of_file[i + 1] == 0x00 {
-                                    to_eliminate.push(i + 1);
+
+                            let mut cleaned_file = Vec::new();
+                            cleaned_file.push(rest_of_file[0]);
+
+                            for i in 1..rest_of_file.len() {
+                                if !(rest_of_file[i - 1] == 0xff && rest_of_file[i] == 0x00) {
+                                    cleaned_file.push(rest_of_file[i]);
                                 }
                             }
-                            to_eliminate.into_iter().for_each(|id| {
-                                rest_of_file.remove(id);
-                            });
 
-                            self.parse_image_data(rest_of_file);
+                            self.parse_image_data(cleaned_file);
                         }
-                        0xfe => println!("\nComment marker:"),
-                        0xd9 => println!("\nEnd of image"),
+                        JFIF_COM => println!("\nComment marker:"),
+                        JFIF_EOI => println!("\nEnd of image"),
                         _ => println!("\nUnknown segment ({:02X})", byte_marker),
                     }
                 }
@@ -183,7 +185,7 @@ impl Decoder {
     }
 
     fn get_huffman_table_dc(&self, component_id: usize) -> &HuffmanTree {
-        let (huffman_dc, huffman_ac) = self.component_id_to_huffman_table[&component_id];
+        let (huffman_dc, _) = self.component_id_to_huffman_table[&component_id];
 
         self.huffman_tables
             .iter()
@@ -193,7 +195,7 @@ impl Decoder {
     }
 
     fn get_huffman_table_ac(&self, component_id: usize) -> &HuffmanTree {
-        let (huffman_dc, huffman_ac) = self.component_id_to_huffman_table[&component_id];
+        let (_, huffman_ac) = self.component_id_to_huffman_table[&component_id];
 
         self.huffman_tables
             .iter()
@@ -202,7 +204,7 @@ impl Decoder {
             .unwrap()
     }
 
-    fn parse_APP0(&mut self, bytes: Vec<u8>) {
+    fn parse_app0(&mut self, bytes: Vec<u8>) {
         let mut img_iter = bytes.into_iter();
 
         let jfif_string = (0..5)
@@ -212,7 +214,7 @@ impl Decoder {
 
         let jfif_string = match std::str::from_utf8(&jfif_string) {
             Ok(v) => v,
-            Err(e) => {
+            Err(_) => {
                 panic!("[E] - this JPG file may be corrupted, it does not present the 'JFIF\\0' string")
             }
         };
@@ -225,8 +227,10 @@ impl Decoder {
         let vers_minor = next_byte(&mut img_iter);
 
         let density_unit = next_byte(&mut img_iter);
-        let density_horizontal = next_byte(&mut img_iter) + next_byte(&mut img_iter);
-        let density_vertical = next_byte(&mut img_iter) + next_byte(&mut img_iter);
+        let density_horizontal =
+            0x10 * 0x10 * next_byte(&mut img_iter) as u16 + next_byte(&mut img_iter) as u16;
+        let density_vertical =
+            0x10 * 0x10 * next_byte(&mut img_iter) as u16 + next_byte(&mut img_iter) as u16;
         let thumbnail_horizontal = next_byte(&mut img_iter);
         let thumbnail_vertical = next_byte(&mut img_iter);
 
@@ -250,14 +254,14 @@ impl Decoder {
         );
     }
 
-    fn parse_DQT(&mut self, bytes: Vec<u8>) {
+    fn parse_dqt(&mut self, bytes: Vec<u8>) {
         let mut img_iter = bytes.into_iter();
 
         let prec_dest_byte = next_byte(&mut img_iter);
         let precision = prec_dest_byte >> 4;
         let table_type = prec_dest_byte << 4 >> 4;
 
-        let mut quantization_table = [[0u8; 64]; 64];
+        let mut quantization_table = [[0u8; 8]; 8];
         for i in 0..8 {
             for j in 0..8 {
                 quantization_table[i][j] = next_byte(&mut img_iter);
@@ -282,7 +286,7 @@ impl Decoder {
         }
     }
 
-    fn parse_DHT(&mut self, bytes: Vec<u8>) {
+    fn parse_dht(&mut self, bytes: Vec<u8>) {
         let mut img_iter = bytes.into_iter();
 
         let table_info = next_byte(&mut img_iter);
@@ -316,27 +320,29 @@ impl Decoder {
 
         println!("\ttable type: {} (0 for DC, 1 for AC)", table_type);
         println!("\ttable number: {}", table_number);
-        println!("\thuffman table lengths:");
-        print!("\t\t");
-        for i in lengths.iter() {
-            print!("{} ", i);
-        }
-        println!();
-        println!("\thuffman table characters:");
-        print!("\t\t");
-        for i in characters.iter() {
-            print!("{:02X} ", i);
-        }
-        self.huffman_tables.last().unwrap().print();
-        println!();
+        //        println!("\thuffman table lengths:");
+        //        print!("\t\t");
+        //        for i in lengths.iter() {
+        //            print!("{} ", i);
+        //        }
+        //        println!();
+        //        println!("\thuffman table characters:");
+        //        print!("\t\t");
+        //        for i in characters.iter() {
+        //            print!("{:02X} ", i);
+        //        }
+        //        self.huffman_tables.last().unwrap().print();
+        //        println!();
     }
 
-    fn parse_SOF(&mut self, bytes: Vec<u8>) {
+    fn parse_sof(&mut self, bytes: Vec<u8>) {
         let mut img_iter = bytes.into_iter();
 
         let precision = next_byte(&mut img_iter);
-        let img_height = next_byte(&mut img_iter) + next_byte(&mut img_iter);
-        let img_width = next_byte(&mut img_iter) + next_byte(&mut img_iter);
+        let img_height =
+            0x10 * 0x10 * next_byte(&mut img_iter) as usize + next_byte(&mut img_iter) as usize;
+        let img_width =
+            0x10 * 0x10 * next_byte(&mut img_iter) as usize + next_byte(&mut img_iter) as usize;
 
         self.img_height = img_height as usize;
         self.img_width = img_width as usize;
@@ -345,7 +351,7 @@ impl Decoder {
         println!("\timage size: {}x{}", img_height, img_width);
     }
 
-    fn parse_SOS(&mut self, bytes: Vec<u8>) {
+    fn parse_sos0(&mut self, bytes: Vec<u8>) {
         let mut img_iter = bytes.into_iter();
 
         let component_count = next_byte(&mut img_iter);
@@ -357,7 +363,7 @@ impl Decoder {
         }
 
         println!("\thuffman tables for components:");
-        for i in 0..component_count {
+        for _ in 0..component_count {
             let mut component_id = next_byte(&mut img_iter);
             component_id -= 1;
             let huffman_table = next_byte(&mut img_iter);
@@ -375,6 +381,8 @@ impl Decoder {
     }
 
     fn parse_image_data(&mut self, img_data: Vec<u8>) {
+        let mut file = File::create("rust_idct.log").unwrap();
+        let mut buffer = BufWriter::new(file);
         let mcu_count = self.img_width * self.img_height / 64 as usize;
 
         let mut img_bits = Vec::new();
@@ -382,12 +390,6 @@ impl Decoder {
             let bits = u8_to_bool(*byte);
             bits.into_iter().for_each(|b| img_bits.push(b));
         }
-
-        println!("{}", img_bits.len());
-        for i in img_bits.iter() {
-            print!("{}", if *i { "1" } else { "0" });
-        }
-        println!();
 
         let mut img_bits_iter = img_bits.into_iter();
         let mut cnt = 0;
@@ -433,15 +435,12 @@ impl Decoder {
                     }
                 }
 
-                //println!("cnt {}", cnt);
-
                 // decode AC
                 let huffman_table = self.get_huffman_table_ac(comp_id);
                 let mut scanned_bits = Vec::new();
                 let mut ac_count = 0;
                 loop {
                     if ac_count == 63 {
-                        //println!("wowowowow 63");
                         break;
                     }
                     scanned_bits.push(next_bit(&mut img_bits_iter));
@@ -476,14 +475,19 @@ impl Decoder {
                     }
                 }
             }
-            //println!("{} ({}/{})", cnt, mcu_id, mcu_count);
-            //println!("{:?}", run_length_encoding);
             let mut mcu = MCU::new(mcu_id, run_length_encoding, dc_sums);
-            mcu.build_idct();
+            mcu.build_rgb_block(
+                &self.quantization_table_luma,
+                &self.quantization_table_chroma,
+                &mut buffer,
+            );
             self.mcus.push(mcu);
         }
-        for m in self.mcus.iter() {
-            m.print();
-        }
+
+        buffer.flush();
+
+        let mut img = Image::new(self.img_width, self.img_height);
+        img.build_from_mcus(&self.mcus);
+        img.dump_to_ppm("test.ppm").unwrap();
     }
 }
