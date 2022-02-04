@@ -3,8 +3,7 @@ use crate::huffman_tree::{HuffmanResult, HuffmanTree};
 use crate::image::Image;
 use crate::mcu::MCU;
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::fs;
 
 pub struct Decoder<'a> {
     img_path: &'a str,
