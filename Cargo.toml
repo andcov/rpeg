@@ -3,6 +3,10 @@ name = "rpeg"
 version = "0.1.0"
 authors = ["andcov <andreicovaci123@gmail.com>"]
 edition = "2018"
+description = "Experimental, very limited JPEG decoder."
+license = "MIT"
+homepage = "https://andcov.dev/"
+repository = "https://github.com/andcov/rpeg/"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
