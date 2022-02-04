@@ -30,8 +30,8 @@ impl Image {
             let x_0 = (mcu_id * 8) % apparent_width;
             let y_0 = (mcu_id * 8) / apparent_width * 8;
 
-            for dx in 0..8 {
-                for dy in 0..8 {
+            for dy in 0..8 {
+                for dx in 0..8 {
                     if y_0 + dy < self.height && x_0 + dx < self.width {
                         self.image_rgb[0][y_0 + dy][x_0 + dx] = mcu.rgb[0][dy][dx];
                         self.image_rgb[1][y_0 + dy][x_0 + dx] = mcu.rgb[1][dy][dx];

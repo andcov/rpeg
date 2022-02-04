@@ -381,8 +381,11 @@ impl Decoder {
     }
 
     fn parse_image_data(&mut self, img_data: Vec<u8>) {
-        let mut file = File::create("rust_idct.log").unwrap();
-        let mut buffer = BufWriter::new(file);
+        let file_idct = File::create("rust_idct.log").unwrap();
+        let mut buffer_idct = BufWriter::new(file_idct);
+        let file_dct = File::create("rust_dct.log").unwrap();
+        let mut buffer_dct = BufWriter::new(file_dct);
+
         let mcu_count = self.img_width * self.img_height / 64 as usize;
 
         let mut img_bits = Vec::new();
@@ -392,8 +395,8 @@ impl Decoder {
         }
 
         let mut img_bits_iter = img_bits.into_iter();
-        let mut cnt = 0;
         let mut dc_sums = [0; 3];
+        let mut next_dc_sums = [0; 3];
 
         for mcu_id in 0..mcu_count {
             let mut run_length_encoding: Vec<Vec<i32>> = vec![Vec::new(), Vec::new(), Vec::new()];
@@ -404,7 +407,6 @@ impl Decoder {
                 let mut scanned_bits = Vec::new();
                 loop {
                     scanned_bits.push(next_bit(&mut img_bits_iter));
-                    cnt += 1;
 
                     match huffman_table.try_decode(&scanned_bits) {
                         HuffmanResult::Some(val) => {
@@ -415,12 +417,11 @@ impl Decoder {
                             for _ in 0..category {
                                 dc_coeff = dc_coeff << 1;
                                 dc_coeff += next_bit(&mut img_bits_iter) as u16;
-                                cnt += 1;
                             }
 
                             let dc_coeff = bitstring_to_value(dc_coeff, category);
 
-                            dc_sums[comp_id] += dc_coeff;
+                            next_dc_sums[comp_id] += dc_coeff;
 
                             run_length_encoding[comp_id].push(zero_count as i32);
                             run_length_encoding[comp_id].push(dc_coeff);
@@ -444,7 +445,6 @@ impl Decoder {
                         break;
                     }
                     scanned_bits.push(next_bit(&mut img_bits_iter));
-                    cnt += 1;
 
                     match huffman_table.try_decode(&scanned_bits) {
                         HuffmanResult::Some(val) => {
@@ -455,7 +455,6 @@ impl Decoder {
                             for _ in 0..category {
                                 ac_coeff = ac_coeff << 1;
                                 ac_coeff += next_bit(&mut img_bits_iter) as u16;
-                                cnt += 1;
                             }
 
                             let ac_coeff = bitstring_to_value(ac_coeff, category);
@@ -475,16 +474,19 @@ impl Decoder {
                     }
                 }
             }
-            let mut mcu = MCU::new(mcu_id, run_length_encoding, dc_sums);
+            let mut mcu = MCU::new(mcu_id, run_length_encoding, dc_sums, &mut buffer_dct);
             mcu.build_rgb_block(
                 &self.quantization_table_luma,
                 &self.quantization_table_chroma,
-                &mut buffer,
+                &mut buffer_idct,
             );
             self.mcus.push(mcu);
+
+            dc_sums = next_dc_sums;
         }
 
-        buffer.flush();
+        buffer_idct.flush().unwrap();
+        buffer_dct.flush().unwrap();
 
         let mut img = Image::new(self.img_width, self.img_height);
         img.build_from_mcus(&self.mcus);
